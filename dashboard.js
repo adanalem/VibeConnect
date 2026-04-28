@@ -10,12 +10,18 @@ async function init() {
     const { data: { session } } = await supabaseClient.auth.getSession();
     if (!session) return window.location.replace("index.html");
 
+    // Fetch Latest Profile Photo from Supabase (WhatsApp Logic)
+    const { data: profile } = await supabaseClient
+        .from('profiles')
+        .select('avator_url')
+        .eq('id', session.user.id)
+        .single();
+
     const name = session.user.user_metadata.display_name || "User";
     document.getElementById('user-display-name').innerText = name;
 
-    const savedPhoto = localStorage.getItem(`user_dp_${session.user.id}`);
     const defaultAvatar = `https://ui-avatars.com/api/?name=${name}&background=random`;
-    const finalPhoto = savedPhoto || defaultAvatar;
+    const finalPhoto = profile?.avator_url || localStorage.getItem(`user_dp_${session.user.id}`) || defaultAvatar;
     
     document.querySelectorAll('.profile-img-sync').forEach(img => img.src = finalPhoto);
 
@@ -61,7 +67,7 @@ document.getElementById('theme-toggle')?.addEventListener('click', () => {
     applyTheme(themes[nextIndex]);
 });
 
-// --- 3. PROFILE UPDATE ---
+// --- 3. PROFILE UPDATE (Global WhatsApp Style) ---
 document.getElementById('image-upload')?.addEventListener('change', async (e) => {
     const file = e.target.files[0];
     if (file) {
@@ -69,9 +75,20 @@ document.getElementById('image-upload')?.addEventListener('change', async (e) =>
         reader.onload = async (event) => {
             const base64Image = event.target.result;
             const { data: { session } } = await supabaseClient.auth.getSession();
-            localStorage.setItem(`user_dp_${session.user.id}`, base64Image);
-            document.querySelectorAll('.profile-img-sync').forEach(img => img.src = base64Image);
-            Swal.fire({ icon: 'success', title: 'Profile Updated!', showConfirmButton: false, timer: 1500 });
+            
+            // Update in Supabase Profiles Table
+            const { error } = await supabaseClient.from('profiles').upsert({ 
+                id: session.user.id, 
+                avator_url: base64Image,
+                display_name: session.user.user_metadata.display_name 
+            });
+
+            if (!error) {
+                localStorage.setItem(`user_dp_${session.user.id}`, base64Image);
+                document.querySelectorAll('.profile-img-sync').forEach(img => img.src = base64Image);
+                Swal.fire({ icon: 'success', title: 'DP Updated Everywhere!', showConfirmButton: false, timer: 1500 });
+                fetchPosts();
+            }
         };
         reader.readAsDataURL(file);
     }
@@ -125,9 +142,13 @@ document.getElementById('submit-post')?.addEventListener('click', async () => {
     }
 });
 
-// --- 5. RENDER 3D FEED (With Database Likes) ---
+// --- 5. RENDER 3D FEED (With Global DP & Permanent Likes) ---
 async function fetchPosts() {
-    const { data: posts, error } = await supabaseClient.from('posts').select('*').order('created_at', { ascending: false });
+    const { data: posts, error } = await supabaseClient
+        .from('posts')
+        .select(`*, profiles (avator_url)`)
+        .order('created_at', { ascending: false });
+
     const { data: { session } } = await supabaseClient.auth.getSession();
     const feed = document.getElementById('blog-feed');
     
@@ -141,30 +162,29 @@ async function fetchPosts() {
 
     posts.forEach(post => {
         const isOwner = session && session.user.id === post.user_id;
-        const editBtnStyle = isLight ? "bg-blue-600 text-white shadow-md shadow-blue-200" : "bg-blue-500 text-white shadow-lg";
-        const deleteBtnStyle = isLight ? "bg-red-600 text-white shadow-md shadow-red-200" : "bg-red-600 text-white shadow-lg";
+        const userPhoto = post.profiles?.avator_url || `https://ui-avatars.com/api/?name=${post.author_name}&background=random`;
 
         const postHTML = `
             <div class="${cardClass} rounded-[2.5rem] p-7 mb-8 transform transition hover:scale-[1.01] border border-white/5">
                 <div class="flex justify-between items-start">
                     <div class="flex items-center gap-4">
-                        <div class="w-12 h-12 bg-gradient-to-br from-indigo-500 to-purple-600 rounded-2xl flex items-center justify-center font-bold text-white shadow-lg">
-                            ${post.author_name ? post.author_name[0] : 'U'}
+                        <img src="${userPhoto}" class="w-12 h-12 rounded-2xl object-cover border-2 border-indigo-500/20 shadow-md" />
+                        <div>
+                            <p class="font-black text-sm tracking-tight">${post.author_name || 'Anonymous'}</p>
+                            <p class="text-[10px] opacity-40 font-bold">${new Date(post.created_at).toLocaleTimeString()}</p>
                         </div>
-                        <div><p class="font-black text-sm tracking-tight">${post.author_name || 'Anonymous'}</p>
-                        <p class="text-[10px] opacity-40 font-bold">${new Date(post.created_at).toLocaleTimeString()}</p></div>
                     </div>
                     ${isOwner ? `
                         <div class="flex gap-2">
-                            <button onclick="editPost('${post.id}')" class="px-4 py-2 rounded-xl text-[11px] font-black uppercase tracking-wider transition-all active:scale-95 ${editBtnStyle}">Edit</button>
-                            <button onclick="deletePost('${post.id}')" class="px-4 py-2 rounded-xl text-[11px] font-black uppercase tracking-wider transition-all active:scale-95 ${deleteBtnStyle}">Delete</button>
+                            <button onclick="editPost('${post.id}')" class="px-4 py-2 rounded-xl text-[10px] font-black bg-blue-600 text-white shadow-md">EDIT</button>
+                            <button onclick="deletePost('${post.id}')" class="px-4 py-2 rounded-xl text-[10px] font-black bg-red-600 text-white shadow-md">DELETE</button>
                         </div>` : ''}
                 </div>
                 <p id="post-text-${post.id}" class="mt-6 text-[15px] leading-relaxed font-semibold opacity-90">${post.content}</p>
-                ${post.image_url ? `<div class="mt-5 rounded-[2rem] overflow-hidden shadow-2xl"><img src="${post.image_url}" class="w-full max-h-[500px] object-cover"></div>` : ''}
+                ${post.image_url ? `<div class="mt-5 rounded-[2rem] overflow-hidden shadow-2xl"><img src="${post.image_url}" class="w-full object-cover"></div>` : ''}
                 <div class="flex gap-8 mt-6 pt-5 border-t border-black/5 flex items-center">
                     <button onclick="handleLike(this, '${post.id}')" class="group flex items-center gap-2 hover:scale-110 transition-all">
-                        <div class="w-9 h-9 rounded-full bg-red-500/10 flex items-center justify-center group-hover:bg-red-500 group-hover:text-white transition-all shadow-inner">❤️</div>
+                        <div class="w-9 h-9 rounded-full bg-red-500/10 flex items-center justify-center group-hover:bg-red-500 group-hover:text-white transition-all">❤️</div>
                         <span class="like-count font-black">${post.likes_count || 0}</span>
                     </button>
                 </div>
@@ -177,7 +197,6 @@ async function fetchPosts() {
 window.deletePost = async (id) => {
     const result = await Swal.fire({
         title: 'Are you sure? 🤔',
-        text: "This will delete the post forever!",
         icon: 'warning',
         showCancelButton: true,
         confirmButtonText: 'Yes, delete it!',
@@ -215,16 +234,11 @@ window.handleLike = async (btn, postId) => {
     const countSpan = btn.querySelector('.like-count');
     let currentLikes = parseInt(countSpan.innerText);
     
-    // UI update (instantly)
     const isLiked = btn.classList.toggle('text-red-500');
     const newLikes = isLiked ? currentLikes + 1 : Math.max(0, currentLikes - 1);
     countSpan.innerText = newLikes;
 
-    // Database update
-    await supabaseClient
-        .from('posts')
-        .update({ likes_count: newLikes })
-        .eq('id', postId);
+    await supabaseClient.from('posts').update({ likes_count: newLikes }).eq('id', postId);
 };
 
 document.getElementById('logout-btn')?.addEventListener('click', async () => {
