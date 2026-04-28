@@ -128,8 +128,7 @@ document.getElementById('submit-post')?.addEventListener('click', async () => {
             content: content, 
             author_name: session.user.user_metadata.display_name || "User",
             user_id: session.user.id,
-            image_url: selectedImageBase64,
-            likes_count: 0
+            image_url: selectedImageBase64
         }]);
 
         if (!error) {
